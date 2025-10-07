@@ -2568,6 +2568,7 @@ static void vfio_pci_core_cleanup(void)
 static int __init vfio_pci_core_init(void)
 {
 	/* Allocate shared config space permission data used by all devices */
+	vfio_pci_liveupdate_init();
 	return vfio_pci_init_perm_bits();
 }
 
