@@ -8,8 +8,6 @@
 #include "luo_test_utils.h"
 #include "../kselftest.h"
 
-#define KEXEC_SCRIPT "./do_kexec.sh"
-
 #define NUM_SESSIONS 5
 #define FILES_PER_SESSION 5
 

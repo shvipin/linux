@@ -7,8 +7,6 @@
 
 #include "luo_test_utils.h"
 
-#define KEXEC_SCRIPT "./do_kexec.sh"
-
 #define SESSION_NAME "multi_file_session"
 #define TOKEN_A 101
 #define TOKEN_B 102

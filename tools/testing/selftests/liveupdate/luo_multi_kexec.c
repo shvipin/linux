@@ -7,8 +7,6 @@
 
 #include "luo_test_utils.h"
 
-#define KEXEC_SCRIPT "./do_kexec.sh"
-
 #define NUM_SESSIONS 3
 
 /* Helper to set up one session and all its files */

@@ -9,8 +9,6 @@ LUO_MANUAL_TESTS += luo_multi_kexec
 LUO_MANUAL_TESTS += luo_multi_session
 LUO_MANUAL_TESTS += luo_unreclaimed
 
-TEST_FILES += do_kexec.sh
-
 LUO_MAIN_TESTS += liveupdate
 
 # --- Automatic Rule Generation (Do not edit below) ---

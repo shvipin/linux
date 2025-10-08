@@ -8,6 +8,7 @@ LIBLIVEUPDATE_O := $(patsubst %.c, $(LIBLIVEUPDATE_OUTPUT)/%.o, $(LIBLIVEUPDATE_
 
 LIBLIVEUPDATE_O_DIRS := $(shell dirname $(LIBLIVEUPDATE_O) | uniq)
 $(shell mkdir -p $(LIBLIVEUPDATE_O_DIRS))
+$(shell cp -n $(LIBLIVEUPDATE_SRCDIR)/do_kexec.sh $(LIBLIVEUPDATE_OUTPUT))
 
 CFLAGS += -I$(LIBLIVEUPDATE_SRCDIR)/include
 

@@ -8,7 +8,6 @@
 #include "luo_test_utils.h"
 #include "../kselftest.h"
 
-#define KEXEC_SCRIPT "./do_kexec.sh"
 
 #define SESSION_NAME "unreclaimed_session"
 #define TOKEN_A 100
