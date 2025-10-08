@@ -26,7 +26,9 @@ CFLAGS += -Wall -O2 -Wno-unused-function
 CFLAGS += $(KHDR_INCLUDES)
 LDFLAGS += -static
 
-$(OUTPUT)/liveupdate: $(liveupdate_SOURCES) $(LUO_SHARED_HDRS)
+include lib/libliveupdate.mk
+
+$(OUTPUT)/liveupdate: $(liveupdate_SOURCES) $(LUO_SHARED_HDRS) $(LIBLIVEUPDATE_O)
 	$(call msg,LINK,,$@)
 	$(Q)$(LINK.c) $^ $(LDLIBS) -o $@
 
@@ -35,7 +37,7 @@ $(foreach test,$(LUO_MANUAL_TESTS), \
 	$(eval $(test)_SOURCES := $(test).c $(LUO_SHARED_SRCS)))
 
 define BUILD_RULE_TEMPLATE
-$(OUTPUT)/$(1): $($(1)_SOURCES) $(LUO_SHARED_HDRS)
+$(OUTPUT)/$(1): $($(1)_SOURCES) $(LUO_SHARED_HDRS) $(LIBLIVEUPDATE_O)
 	$(call msg,LINK,,$$@)
 	$(Q)$(LINK.c) $$^ $(LDLIBS) -o $$@
 	$(Q)chmod +x $$@

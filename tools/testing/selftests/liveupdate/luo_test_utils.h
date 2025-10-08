@@ -11,9 +11,9 @@
 #include <errno.h>
 #include <string.h>
 #include <linux/liveupdate.h>
+#include <liveupdate_util.h>
 #include "../kselftest.h"
 
-#define LUO_DEVICE "/dev/liveupdate"
 #define STATE_SESSION_NAME "state_session"
 #define STATE_MEMFD_TOKEN 999
 
@@ -30,18 +30,10 @@ struct session_info {
 	ksft_exit_fail_msg("[%s] " fmt " (errno: %s)\n",		\
 			   __func__, ##__VA_ARGS__, strerror(errno))
 
-int luo_open_device(void);
-
-int luo_create_session(int luo_fd, const char *name);
-int luo_retrieve_session(int luo_fd, const char *name);
 
 int create_and_preserve_memfd(int session_fd, int token, const char *data);
 int restore_and_verify_memfd(int session_fd, int token, const char *expected_data);
 int verify_session_and_get_fd(int luo_fd, struct session_info *s);
-
-int luo_set_session_event(int session_fd, enum liveupdate_event event);
-int luo_set_global_event(int luo_fd, enum liveupdate_event event);
-int luo_get_global_state(int luo_fd, enum liveupdate_state *state);
 
 void create_state_file(int luo_fd, int next_stage);
 int restore_and_read_state(int luo_fd, int *stage);
