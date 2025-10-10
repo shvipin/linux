@@ -8,9 +8,16 @@
  */
 
 #include <linux/liveupdate.h>
+#include <linux/vfio.h>
 #include <linux/errno.h>
 
 #include "vfio_pci_priv.h"
+
+static int vfio_pci_liveupdate_prepare(struct liveupdate_file_handler *handler,
+				       struct file *file, u64 *data)
+{
+	return -EOPNOTSUPP;
+}
 
 static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_handler *handler,
 					u64 data, struct file **file)
@@ -21,10 +28,17 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_handler *handler,
 static bool vfio_pci_liveupdate_can_preserve(struct liveupdate_file_handler *handler,
 					     struct file *file)
 {
-	return -EOPNOTSUPP;
+	struct vfio_device *device = vfio_device_from_file(file);
+
+	if (!device)
+		return false;
+
+	guard(mutex)(&device->dev_set->lock);
+	return vfio_device_cdev_opened(device);
 }
 
 static const struct liveupdate_file_ops vfio_pci_luo_fops = {
+	.prepare = vfio_pci_liveupdate_prepare,
 	.retrieve = vfio_pci_liveupdate_retrieve,
 	.can_preserve = vfio_pci_liveupdate_can_preserve,
 	.owner = THIS_MODULE,
