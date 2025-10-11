@@ -13,6 +13,7 @@
 #include <linux/cdev.h>
 #include <linux/compat.h>
 #include <linux/device.h>
+#include <linux/device/class.h>
 #include <linux/fs.h>
 #include <linux/idr.h>
 #include <linux/iommu.h>
@@ -177,6 +178,7 @@ bool vfio_device_try_get_registration(struct vfio_device *device)
 {
 	return refcount_inc_not_zero(&device->refcount);
 }
+EXPORT_SYMBOL_GPL(vfio_device_try_get_registration);
 
 /*
  * VFIO driver API
@@ -502,6 +504,7 @@ vfio_allocate_device_file(struct vfio_device *device)
 
 	return df;
 }
+EXPORT_SYMBOL_GPL(vfio_allocate_device_file);
 
 static int vfio_df_device_first_open(struct vfio_device_file *df)
 {
@@ -1385,6 +1388,7 @@ const struct file_operations vfio_device_fops = {
 	.show_fdinfo	= vfio_device_show_fdinfo,
 #endif
 };
+EXPORT_SYMBOL_GPL(vfio_device_fops);
 
 struct vfio_device *vfio_device_from_file(struct file *file)
 {
@@ -1715,6 +1719,19 @@ int vfio_dma_rw(struct vfio_device *device, dma_addr_t iova, void *data,
 	return -EINVAL;
 }
 EXPORT_SYMBOL(vfio_dma_rw);
+
+struct vfio_device *vfio_find_device_in_cdev_class(const void *data,
+						   device_match_t match)
+{
+	struct device *device = class_find_device(vfio.device_class, NULL, data,
+						  match);
+
+	if (!device)
+		return NULL;
+
+	return container_of(device, struct vfio_device, device);
+}
+EXPORT_SYMBOL_GPL(vfio_find_device_in_cdev_class);
 
 /*
  * Module/class support

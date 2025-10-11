@@ -386,5 +386,11 @@ void vfio_virqfd_disable(struct virqfd **pvirqfd);
 void vfio_virqfd_flush_thread(struct virqfd **pvirqfd);
 
 struct vfio_device *vfio_device_from_file(struct file *file);
+struct vfio_device *vfio_find_device_in_cdev_class(const void *data,
+						   device_match_t match);
+bool vfio_device_try_get_registration(struct vfio_device *device);
+struct vfio_device_file *vfio_allocate_device_file(struct vfio_device *device);
+
+extern const struct file_operations vfio_device_fops;
 
 #endif /* VFIO_H */
