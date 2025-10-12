@@ -82,6 +82,38 @@ static int match_bdf(struct device *device, const void *bdf)
 	return *(u16 *)bdf == pci_dev_id(vdev->pdev);
 }
 
+static void vfio_pci_liveupdate_finish(struct liveupdate_file_handler *handler,
+				       struct file *file, u64 data, bool reclaimed)
+{
+	struct vfio_pci_core_device_ser *ser;
+	struct vfio_pci_core_device *vdev;
+	struct vfio_device *device;
+	struct folio *folio;
+
+	if (reclaimed) {
+		folio = virt_to_folio(phys_to_virt(data));
+		goto out_folio_put;
+	} else {
+		folio = kho_restore_folio(data);
+	}
+
+	if (!folio)
+		return;
+
+	ser = folio_address(folio);
+
+	device = vfio_find_device_in_cdev_class(&ser->bdf, match_bdf);
+	if (!device)
+		goto out_folio_put;
+
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+	pci_try_reset_function(vdev->pdev);
+	put_device(&device->device);
+
+out_folio_put:
+	folio_put(folio);
+}
+
 static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_handler *handler,
 					u64 data, struct file **file)
 {
@@ -156,6 +188,7 @@ static bool vfio_pci_liveupdate_can_preserve(struct liveupdate_file_handler *han
 static const struct liveupdate_file_ops vfio_pci_luo_fops = {
 	.prepare = vfio_pci_liveupdate_prepare,
 	.cancel = vfio_pci_liveupdate_cancel,
+	.finish = vfio_pci_liveupdate_finish,
 	.retrieve = vfio_pci_liveupdate_retrieve,
 	.can_preserve = vfio_pci_liveupdate_can_preserve,
 	.owner = THIS_MODULE,
