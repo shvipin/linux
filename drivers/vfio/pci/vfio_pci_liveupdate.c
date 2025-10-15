@@ -96,12 +96,10 @@ static void vfio_pci_liveupdate_finish(struct liveupdate_file_handler *handler,
 	struct vfio_device *device;
 	struct folio *folio;
 
-	if (reclaimed) {
+	if (reclaimed)
 		folio = virt_to_folio(phys_to_virt(data));
-		goto out_folio_put;
-	} else {
+	else
 		folio = kho_restore_folio(data);
-	}
 
 	if (!folio)
 		return;
@@ -113,7 +111,14 @@ static void vfio_pci_liveupdate_finish(struct liveupdate_file_handler *handler,
 		goto out_folio_put;
 
 	vdev = container_of(device, struct vfio_pci_core_device, vdev);
-	pci_try_reset_function(vdev->pdev);
+	if (reclaimed) {
+		guard(mutex)(&device->dev_set->lock);
+		if (!vfio_device_cdev_opened(device))
+			pci_err(vdev->pdev, "Open count is 0, userspace might not have restored the device.\n");
+		vdev->liveupdate_restore = NULL;
+	} else {
+		pci_try_reset_function(vdev->pdev);
+	}
 	put_device(&device->device);
 
 out_folio_put:
@@ -124,6 +129,7 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_handler *handler,
 					u64 data, struct file **file)
 {
 	struct vfio_pci_core_device_ser *ser;
+	struct vfio_pci_core_device *vdev;
 	struct vfio_device_file *df;
 	struct vfio_device *device;
 	struct folio *folio;
@@ -167,6 +173,9 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_handler *handler,
 	 */
 	filep->f_mapping = device->inode->i_mapping;
 	*file = filep;
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+	guard(mutex)(&device->dev_set->lock);
+	vdev->liveupdate_restore = ser;
 
 	return 0;
 

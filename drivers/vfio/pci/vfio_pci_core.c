@@ -475,8 +475,12 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 			return ret;
 	}
 
-	/* Don't allow our initial saved state to include busmaster */
-	pci_clear_master(pdev);
+	/*
+	 * Don't allow our initial saved state to include busmaster. However, if
+	 * device is participating in liveupdate then don't change this bit.
+	 */
+	if (!vdev->liveupdate_restore)
+		pci_clear_master(pdev);
 
 	ret = pci_enable_device(pdev);
 	if (ret)
