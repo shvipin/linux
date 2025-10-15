@@ -486,13 +486,18 @@ static void vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id)
 	ioctl_assert(device_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &args);
 }
 
-static void vfio_pci_iommufd_setup(struct vfio_pci_device *device, const char *bdf)
+static void vfio_pci_iommufd_setup(struct vfio_pci_device *device,
+				   const char *bdf, int vfio_cdev_fd)
 {
-	const char *cdev_path = vfio_pci_get_cdev_path(bdf);
 
-	device->fd = open(cdev_path, O_RDWR);
+	if (vfio_cdev_fd > 0) {
+		device->fd = vfio_cdev_fd;
+	} else {
+		const char *cdev_path = vfio_pci_get_cdev_path(bdf);
+		device->fd = open(cdev_path, O_RDWR);
+		free((void *)cdev_path);
+	}
 	VFIO_ASSERT_GE(device->fd, 0);
-	free((void *)cdev_path);
 
 	/*
 	 * Require device->iommufd to be >0 so that a simple non-0 check can be
@@ -507,7 +512,9 @@ static void vfio_pci_iommufd_setup(struct vfio_pci_device *device, const char *b
 	vfio_device_attach_iommufd_pt(device->fd, device->ioas_id);
 }
 
-struct vfio_pci_device *vfio_pci_device_init(const char *bdf, const char *iommu_mode)
+struct vfio_pci_device *__vfio_pci_device_init(const char *bdf,
+					       const char *iommu_mode,
+					       int vfio_cdev_fd)
 {
 	struct vfio_pci_device *device;
 
@@ -518,15 +525,29 @@ struct vfio_pci_device *vfio_pci_device_init(const char *bdf, const char *iommu_
 
 	device->iommu_mode = lookup_iommu_mode(iommu_mode);
 
+	VFIO_ASSERT_FALSE(device->iommu_mode->container_path != NULL && vfio_cdev_fd > 0,
+			  "Provide either container path or VFIO cdev FD, not both.\n");
+
 	if (device->iommu_mode->container_path)
 		vfio_pci_container_setup(device, bdf);
 	else
-		vfio_pci_iommufd_setup(device, bdf);
+		vfio_pci_iommufd_setup(device, bdf, vfio_cdev_fd);
 
 	vfio_pci_device_setup(device);
 	vfio_pci_driver_probe(device);
 
 	return device;
+}
+
+struct vfio_pci_device *vfio_pci_device_init(const char *bdf,
+					     const char *iommu_mode)
+{
+	return __vfio_pci_device_init(bdf, iommu_mode, -1);
+}
+
+struct vfio_pci_device *vfio_pci_device_init_fd(int vfio_cdev_fd)
+{
+	return __vfio_pci_device_init(NULL, "iommufd", vfio_cdev_fd);
 }
 
 void vfio_pci_device_cleanup(struct vfio_pci_device *device)
