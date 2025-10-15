@@ -54,6 +54,7 @@ static int vfio_pci_liveupdate_prepare(struct liveupdate_file_handler *handler,
 		goto err_free_folio;
 
 	*data = virt_to_phys(ser);
+	vdev->pdev->skip_kexec_clear_master = true;
 
 	return 0;
 
@@ -67,7 +68,12 @@ static void vfio_pci_liveupdate_cancel(struct liveupdate_file_handler *handler,
 {
 	struct vfio_pci_core_device_ser *ser = phys_to_virt(data);
 	struct folio *folio = virt_to_folio(ser);
+	struct vfio_pci_core_device *vdev;
+	struct vfio_device *device;
 
+	device = vfio_device_from_file(file);
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+	vdev->pdev->skip_kexec_clear_master = false;
 	WARN_ON_ONCE(kho_unpreserve_folio(folio));
 	folio_put(folio);
 }
