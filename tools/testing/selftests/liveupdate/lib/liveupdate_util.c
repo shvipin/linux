@@ -38,7 +38,34 @@ int luo_session_preserve_fd(int session_fd, int fd, int token)
 		.token = token
 	};
 
-	return ioctl(session_fd, LIVEUPDATE_SESSION_PRESERVE_FD, &arg) < 0;
+	if (ioctl(session_fd, LIVEUPDATE_SESSION_PRESERVE_FD, &arg) < 0)
+		return -errno;
+	return 0;
+}
+
+int luo_session_unpreserve_fd(int session_fd, int token)
+{
+	struct liveupdate_session_unpreserve_fd arg = {
+		.size = sizeof(arg),
+		.token = token
+	};
+
+	if (ioctl(session_fd, LIVEUPDATE_SESSION_UNPRESERVE_FD, &arg) < 0)
+		return -errno;
+	return 0;
+}
+
+int luo_session_restore_fd(int session_fd, int token)
+{
+	struct liveupdate_session_restore_fd arg = {
+		.size = sizeof(arg),
+		.token = token
+	};
+
+	if (ioctl(session_fd, LIVEUPDATE_SESSION_RESTORE_FD, &arg) < 0)
+		return -errno;
+	return arg.fd;
+
 }
 
 int luo_retrieve_session(int luo_fd, const char *name)

@@ -12,7 +12,6 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <sys/ioctl.h>
 #include <sys/syscall.h>
 #include <sys/mman.h>
 #include <errno.h>
@@ -25,7 +24,6 @@
 
 int create_and_preserve_memfd(int session_fd, int token, const char *data)
 {
-	struct liveupdate_session_preserve_fd arg = { .size = sizeof(arg) };
 	long page_size = sysconf(_SC_PAGE_SIZE);
 	void *map = MAP_FAILED;
 	int mfd = -1, ret = -1;
@@ -44,9 +42,7 @@ int create_and_preserve_memfd(int session_fd, int token, const char *data)
 	snprintf(map, page_size, "%s", data);
 	munmap(map, page_size);
 
-	arg.fd = mfd;
-	arg.token = token;
-	if (ioctl(session_fd, LIVEUPDATE_SESSION_PRESERVE_FD, &arg) < 0)
+	if (luo_session_preserve_fd(session_fd, mfd, token))
 		goto out;
 
 	ret = 0; /* Success */
@@ -61,15 +57,13 @@ out:
 int restore_and_verify_memfd(int session_fd, int token,
 			     const char *expected_data)
 {
-	struct liveupdate_session_restore_fd arg = { .size = sizeof(arg) };
 	long page_size = sysconf(_SC_PAGE_SIZE);
 	void *map = MAP_FAILED;
 	int mfd = -1, ret = -1;
 
-	arg.token = token;
-	if (ioctl(session_fd, LIVEUPDATE_SESSION_RESTORE_FD, &arg) < 0)
-		return -errno;
-	mfd = arg.fd;
+	mfd = luo_session_restore_fd(session_fd, token);
+	if (mfd < 0)
+		return mfd;
 
 	map = mmap(NULL, page_size, PROT_READ, MAP_SHARED, mfd, 0);
 	if (map == MAP_FAILED)
@@ -134,10 +128,8 @@ int restore_and_read_state(int luo_fd, int *stage)
 void update_state_file(int session_fd, int next_stage)
 {
 	char buf[32];
-	struct liveupdate_session_unpreserve_fd arg = { .size = sizeof(arg) };
 
-	arg.token = STATE_MEMFD_TOKEN;
-	if (ioctl(session_fd, LIVEUPDATE_SESSION_UNPRESERVE_FD, &arg) < 0)
+	if (luo_session_unpreserve_fd(session_fd, STATE_MEMFD_TOKEN))
 		fail_exit("unpreserve failed");
 
 	snprintf(buf, sizeof(buf), "%d", next_stage);
