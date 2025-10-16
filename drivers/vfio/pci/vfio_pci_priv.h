@@ -110,12 +110,14 @@ static inline bool vfio_pci_is_vga(struct pci_dev *pdev)
 #ifdef CONFIG_LIVEUPDATE
 void vfio_pci_liveupdate_init(void);
 int vfio_pci_liveupdate_restore_config(struct vfio_pci_core_device *vdev);
+void vfio_pci_liveupdate_restore_device(struct vfio_pci_core_device *vdev);
 #else
 static inline void vfio_pci_liveupdate_init(void) { }
 int vfio_pci_liveupdate_restore_config(struct vfio_pci_core_device *vdev)
 {
 	return -EINVAL;
 }
+void vfio_pci_liveupdate_restore_device(struct vfio_pci_core_device *vdev) { }
 #endif /* CONFIG_LIVEUPDATE */
 
 #endif

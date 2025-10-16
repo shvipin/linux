@@ -22,6 +22,7 @@ struct vfio_pci_core_device_ser {
 	u8 pci_config_map[PCI_CFG_SPACE_EXP_SIZE];
 	u8 vconfig[PCI_CFG_SPACE_EXP_SIZE];
 	u32 rbar[7];
+	u8 reset_works;
 } __packed;
 
 static int vfio_pci_liveupdate_deserialize_config(struct vfio_pci_core_device *vdev,
@@ -55,6 +56,7 @@ static int vfio_pci_lu_serialize(struct vfio_pci_core_device *vdev,
 {
 	ser->bdf = pci_dev_id(vdev->pdev);
 	vfio_pci_liveupdate_serialize_config(vdev, ser);
+	ser->reset_works = vdev->reset_works;
 	return 0;
 }
 
@@ -258,4 +260,11 @@ int vfio_pci_liveupdate_restore_config(struct vfio_pci_core_device *vdev)
 	struct vfio_pci_core_device_ser *ser = vdev->liveupdate_restore;
 
 	return vfio_pci_liveupdate_deserialize_config(vdev, ser);
+}
+
+void vfio_pci_liveupdate_restore_device(struct vfio_pci_core_device *vdev)
+{
+	struct vfio_pci_core_device_ser *ser = vdev->liveupdate_restore;
+
+	vdev->reset_works = ser->reset_works;
 }
