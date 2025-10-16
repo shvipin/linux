@@ -18,12 +18,43 @@
 
 struct vfio_pci_core_device_ser {
 	u16 bdf;
+	u32 cfg_size;
+	u8 pci_config_map[PCI_CFG_SPACE_EXP_SIZE];
+	u8 vconfig[PCI_CFG_SPACE_EXP_SIZE];
+	u32 rbar[7];
 } __packed;
+
+static int vfio_pci_liveupdate_deserialize_config(struct vfio_pci_core_device *vdev,
+						  struct vfio_pci_core_device_ser *ser)
+{
+	struct pci_dev *pdev = vdev->pdev;
+
+	if (WARN_ON_ONCE(pdev->cfg_size != ser->cfg_size)) {
+		dev_err(&pdev->dev, "Config size in serialized (%d) not matching the one pci_dev (%d)",
+			ser->cfg_size, pdev->cfg_size);
+		return -EINVAL;
+	}
+
+	memcpy(vdev->pci_config_map, ser->pci_config_map, ser->cfg_size);
+	memcpy(vdev->vconfig, ser->vconfig, ser->cfg_size);
+	memcpy(vdev->rbar, ser->rbar, sizeof(vdev->rbar));
+	return 0;
+}
+
+static void vfio_pci_liveupdate_serialize_config(struct vfio_pci_core_device *vdev,
+						 struct vfio_pci_core_device_ser *ser)
+{
+	ser->cfg_size = vdev->pdev->cfg_size;
+	memcpy(ser->pci_config_map, vdev->pci_config_map, ser->cfg_size);
+	memcpy(ser->vconfig, vdev->vconfig, ser->cfg_size);
+	memcpy(ser->rbar, vdev->rbar, sizeof(vdev->rbar));
+}
 
 static int vfio_pci_lu_serialize(struct vfio_pci_core_device *vdev,
 				 struct vfio_pci_core_device_ser *ser)
 {
 	ser->bdf = pci_dev_id(vdev->pdev);
+	vfio_pci_liveupdate_serialize_config(vdev, ser);
 	return 0;
 }
 
@@ -220,4 +251,11 @@ void __init vfio_pci_liveupdate_init(void)
 
 	if (err)
 		pr_err("VFIO PCI liveupdate file handler register failed, error %d.\n", err);
+}
+
+int vfio_pci_liveupdate_restore_config(struct vfio_pci_core_device *vdev)
+{
+	struct vfio_pci_core_device_ser *ser = vdev->liveupdate_restore;
+
+	return vfio_pci_liveupdate_deserialize_config(vdev, ser);
 }

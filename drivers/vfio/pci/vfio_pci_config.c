@@ -1756,6 +1756,23 @@ int vfio_config_init(struct vfio_pci_core_device *vdev)
 	vdev->pci_config_map = map;
 	vdev->vconfig = vconfig;
 
+	if (vdev->liveupdate_restore) {
+		ret = vfio_pci_liveupdate_restore_config(vdev);
+		if (ret)
+			goto out;
+		/*
+		 * Liveupdate might have started after userspace writes to BARs
+		 * but before VFIO sanitizes them which happens when BARs are
+		 * read next time.
+		 *
+		 * Assume BARs are dirty so that VFIO will sanitize them
+		 * unconditionally next time and avoid giving userspace wrong
+		 * value.
+		 */
+		vdev->bardirty = true;
+		return 0;
+	}
+
 	memset(map, PCI_CAP_ID_BASIC, PCI_STD_HEADER_SIZEOF);
 	memset(map + PCI_STD_HEADER_SIZEOF, PCI_CAP_ID_INVALID,
 	       pdev->cfg_size - PCI_STD_HEADER_SIZEOF);
