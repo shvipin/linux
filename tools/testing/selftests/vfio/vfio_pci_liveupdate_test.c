@@ -15,12 +15,14 @@
 
 #define SESSION_NAME "multi_file_session"
 #define TOKEN 1234
+#define RANDOM_DATA 0x12
 
 static void run_pre_kexec(int luo_fd, const char *bdf)
 {
 	struct vfio_pci_device *device;
 	int session_fd;
 	u16 command;
+	u8 data;
 
 	device = vfio_pci_device_init(bdf, "iommufd");
 
@@ -29,6 +31,10 @@ static void run_pre_kexec(int luo_fd, const char *bdf)
 
 	vfio_pci_config_writew(device, PCI_COMMAND,
 			       command | PCI_COMMAND_MASTER);
+
+	vfio_pci_config_writeb(device, PCI_INTERRUPT_LINE, RANDOM_DATA);
+	data = vfio_pci_config_readb(device, PCI_INTERRUPT_LINE);
+	VFIO_ASSERT_EQ(data, RANDOM_DATA);
 
 	session_fd = luo_create_session(luo_fd, SESSION_NAME);
 	VFIO_ASSERT_GE(session_fd, 0, "Failed to create session %s",
@@ -51,6 +57,7 @@ static void run_post_kexec(int luo_fd, const char *bdf)
 	int vfio_fd;
 	struct vfio_pci_device *device;
 	u16 command;
+	u8 data;
 
 
 	session_fd = luo_retrieve_session(luo_fd, SESSION_NAME);
@@ -74,6 +81,9 @@ static void run_post_kexec(int luo_fd, const char *bdf)
 
 	command = vfio_pci_config_readw(device, PCI_COMMAND);
 	VFIO_ASSERT_TRUE(command & PCI_COMMAND_MASTER);
+
+	data = vfio_pci_config_readb(device, PCI_INTERRUPT_LINE);
+	VFIO_ASSERT_EQ(data, RANDOM_DATA);
 	vfio_pci_device_cleanup(device);
 }
 
