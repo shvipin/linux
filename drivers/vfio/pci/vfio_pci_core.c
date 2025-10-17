@@ -487,7 +487,9 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 		goto out_power;
 
 	if (vdev->liveupdate_restore) {
-		vfio_pci_liveupdate_restore_device(vdev);
+		ret = vfio_pci_liveupdate_restore_device(vdev);
+		if (ret)
+			goto out_disable_device;
 	} else {
 		/* If reset fails because of the device lock, fail this path entirely */
 		ret = pci_try_reset_function(pdev);
@@ -495,10 +497,11 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 			goto out_disable_device;
 
 		vdev->reset_works = !ret;
+
+		pci_save_state(pdev);
+		vdev->pci_saved_state = pci_store_saved_state(pdev);
 	}
 
-	pci_save_state(pdev);
-	vdev->pci_saved_state = pci_store_saved_state(pdev);
 	if (!vdev->pci_saved_state)
 		pci_dbg(pdev, "%s: Couldn't store saved state\n", __func__);
 

@@ -13,8 +13,21 @@
 #include <linux/anon_inodes.h>
 #include <linux/kexec_handover.h>
 #include <linux/file.h>
+#include <linux/pci.h>
 
 #include "vfio_pci_priv.h"
+
+struct pci_cap_saved_data_ser {
+	u16		cap_nr;
+	bool		cap_extended;
+	unsigned int	size;
+	u32		data[];
+} __packed;
+
+struct pci_saved_state_ser {
+	u32 config_space[16];
+	struct pci_cap_saved_data_ser cap[];
+} __packed;
 
 struct vfio_pci_core_device_ser {
 	u16 bdf;
@@ -23,6 +36,7 @@ struct vfio_pci_core_device_ser {
 	u8 vconfig[PCI_CFG_SPACE_EXP_SIZE];
 	u32 rbar[7];
 	u8 reset_works;
+	u64 pci_saved_state_phys;
 } __packed;
 
 static int vfio_pci_liveupdate_deserialize_config(struct vfio_pci_core_device *vdev,
@@ -51,12 +65,150 @@ static void vfio_pci_liveupdate_serialize_config(struct vfio_pci_core_device *vd
 	memcpy(ser->rbar, vdev->rbar, sizeof(vdev->rbar));
 }
 
+static size_t pci_saved_state_size(struct pci_saved_state *state)
+{
+	struct pci_cap_saved_data *cap;
+	size_t size;
+
+	/* One empty cap to denote end. */
+	size = sizeof(struct pci_saved_state) + sizeof(struct pci_cap_saved_data);
+
+	cap = state->cap;
+	while (cap->size) {
+		size_t len = sizeof(struct pci_cap_saved_data) + cap->size;
+
+		size += len;
+		cap = (struct pci_cap_saved_data *)((u8 *)cap + len);
+	}
+
+	return size;
+}
+
+static size_t pci_saved_state_size_from_ser(struct pci_saved_state_ser *state)
+{
+	struct pci_cap_saved_data_ser *cap;
+	size_t size;
+
+	/* One empty cap to denote end. */
+	size = sizeof(struct pci_saved_state) + sizeof(struct pci_cap_saved_data);
+
+	cap = state->cap;
+	while (cap->size) {
+		size_t len = sizeof(struct pci_cap_saved_data) + cap->size;
+
+		size += len;
+		cap = (struct pci_cap_saved_data_ser *)((u8 *)cap + len);
+	}
+
+	return size;
+}
+
+static void serialize_pci_cap_saved_data(struct pci_saved_state *state,
+					 struct pci_saved_state_ser *state_ser)
+{
+	struct pci_cap_saved_data_ser *cap_ser = state_ser->cap;
+	struct pci_cap_saved_data *cap = state->cap;
+
+	while (cap->size) {
+		cap_ser->cap_nr = cap->cap_nr;
+		cap_ser->cap_extended = cap->cap_extended;
+		cap_ser->size = cap->size;
+		memcpy(cap_ser->data, cap->data, cap_ser->size);
+
+		cap = (void *)cap + sizeof(*cap) + cap->size;
+		cap_ser = (void *)cap_ser + sizeof(*cap_ser) + cap_ser->size;
+	}
+}
+
+static void deserialize_pci_cap_saved_data(struct pci_saved_state *state,
+					   struct pci_saved_state_ser *state_ser)
+{
+	struct pci_cap_saved_data_ser *cap_ser = state_ser->cap;
+	struct pci_cap_saved_data *cap = state->cap;
+
+	while (cap_ser->size) {
+		cap->cap_nr = cap_ser->cap_nr;
+		cap->cap_extended = cap_ser->cap_extended;
+		cap->size = cap_ser->size;
+		memcpy(cap->data, cap_ser->data, cap_ser->size);
+
+		cap = (void *)cap + sizeof(*cap) + cap->size;
+		cap_ser = (void *)cap_ser + sizeof(*cap_ser) + cap_ser->size;
+	}
+}
+
+static int serialize_pci_saved_state(struct vfio_pci_core_device *vdev,
+				     struct vfio_pci_core_device_ser *ser)
+{
+	struct pci_saved_state *state = vdev->pci_saved_state;
+	struct pci_saved_state_ser *state_ser;
+	struct folio *folio;
+	size_t size;
+	int ret;
+
+	if (!state)
+		return 0;
+
+	size = pci_saved_state_size(state);
+
+	folio = folio_alloc(GFP_KERNEL | __GFP_ZERO, get_order(size));
+	if (!folio)
+		return -ENOMEM;
+
+	state_ser = folio_address(folio);
+
+	memcpy(state_ser->config_space, state->config_space,
+	       sizeof(state_ser->config_space));
+
+	serialize_pci_cap_saved_data(state, state_ser);
+
+	ret = kho_preserve_folio(folio);
+	if (ret) {
+		folio_put(folio);
+		return ret;
+	}
+
+	ser->pci_saved_state_phys = virt_to_phys(state_ser);
+
+	return 0;
+}
+
+static int deserialize_pci_saved_state(struct vfio_pci_core_device *vdev,
+				       struct vfio_pci_core_device_ser *ser)
+{
+	struct pci_saved_state_ser *state_ser;
+	struct pci_saved_state *state;
+	size_t size;
+
+	if (!ser->pci_saved_state_phys)
+		return 0;
+
+	state_ser = phys_to_virt(ser->pci_saved_state_phys);
+	size = pci_saved_state_size_from_ser(state_ser);
+	state = kzalloc(size, GFP_KERNEL);
+	if (!state)
+		return -ENOMEM;
+
+	memcpy(state->config_space, state_ser->config_space,
+	       sizeof(state_ser->config_space));
+
+	deserialize_pci_cap_saved_data(state, state_ser);
+	vdev->pci_saved_state = state;
+	return 0;
+}
+
 static int vfio_pci_lu_serialize(struct vfio_pci_core_device *vdev,
 				 struct vfio_pci_core_device_ser *ser)
 {
+	int err;
+
 	ser->bdf = pci_dev_id(vdev->pdev);
 	vfio_pci_liveupdate_serialize_config(vdev, ser);
 	ser->reset_works = vdev->reset_works;
+	err = serialize_pci_saved_state(vdev, ser);
+	if (err)
+		return err;
+
 	return 0;
 }
 
@@ -101,12 +253,18 @@ static void vfio_pci_liveupdate_cancel(struct liveupdate_file_handler *handler,
 {
 	struct vfio_pci_core_device_ser *ser = phys_to_virt(data);
 	struct folio *folio = virt_to_folio(ser);
+	struct folio *pci_saved_state_folio;
 	struct vfio_pci_core_device *vdev;
 	struct vfio_device *device;
 
 	device = vfio_device_from_file(file);
 	vdev = container_of(device, struct vfio_pci_core_device, vdev);
 	vdev->pdev->skip_kexec_clear_master = false;
+	if (ser->pci_saved_state_phys) {
+		pci_saved_state_folio = virt_to_folio(phys_to_virt(ser->pci_saved_state_phys));
+		WARN_ON_ONCE(kho_unpreserve_folio(pci_saved_state_folio));
+		folio_put(pci_saved_state_folio);
+	}
 	WARN_ON_ONCE(kho_unpreserve_folio(folio));
 	folio_put(folio);
 }
@@ -139,6 +297,9 @@ static void vfio_pci_liveupdate_finish(struct liveupdate_file_handler *handler,
 
 	ser = folio_address(folio);
 
+	if (!reclaimed && ser->pci_saved_state_phys)
+		kho_restore_folio(ser->pci_saved_state_phys);
+
 	device = vfio_find_device_in_cdev_class(&ser->bdf, match_bdf);
 	if (!device)
 		goto out_folio_put;
@@ -155,6 +316,8 @@ static void vfio_pci_liveupdate_finish(struct liveupdate_file_handler *handler,
 	put_device(&device->device);
 
 out_folio_put:
+	if (ser->pci_saved_state_phys)
+		folio_put(virt_to_folio(phys_to_virt(ser->pci_saved_state_phys)));
 	folio_put(folio);
 }
 
@@ -174,6 +337,11 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_handler *handler,
 		return -ENOENT;
 
 	ser = folio_address(folio);
+	if (ser->pci_saved_state_phys) {
+		if (!kho_restore_folio(ser->pci_saved_state_phys))
+			return -ENOENT;
+	}
+
 	device = vfio_find_device_in_cdev_class(&ser->bdf, match_bdf);
 	if (!device)
 		return -ENODEV;
@@ -262,9 +430,15 @@ int vfio_pci_liveupdate_restore_config(struct vfio_pci_core_device *vdev)
 	return vfio_pci_liveupdate_deserialize_config(vdev, ser);
 }
 
-void vfio_pci_liveupdate_restore_device(struct vfio_pci_core_device *vdev)
+int vfio_pci_liveupdate_restore_device(struct vfio_pci_core_device *vdev)
 {
 	struct vfio_pci_core_device_ser *ser = vdev->liveupdate_restore;
+	int err;
+
+	err = deserialize_pci_saved_state(vdev, ser);
+	if (err)
+		return err;
 
 	vdev->reset_works = ser->reset_works;
+	return 0;
 }
