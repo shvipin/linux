@@ -248,6 +248,22 @@ err_free_folio:
 	return err;
 }
 
+static int vfio_pci_liveupdate_freeze(struct liveupdate_file_handler *handler,
+				      struct file *file, u64 *data)
+{
+	struct vfio_pci_core_device *vdev;
+	struct vfio_device *device;
+
+	device = vfio_device_from_file(file);
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+
+	guard(mutex)(&vdev->igate);
+	if (vdev->irq_type == VFIO_PCI_NUM_IRQS)
+		return 0;
+	return vfio_pci_set_irqs_ioctl(vdev, VFIO_IRQ_SET_DATA_NONE | VFIO_IRQ_SET_ACTION_TRIGGER,
+				       vdev->irq_type, 0, 0, NULL);
+}
+
 static void vfio_pci_liveupdate_cancel(struct liveupdate_file_handler *handler,
 				       struct file *file, u64 data)
 {
@@ -403,6 +419,7 @@ static bool vfio_pci_liveupdate_can_preserve(struct liveupdate_file_handler *han
 
 static const struct liveupdate_file_ops vfio_pci_luo_fops = {
 	.prepare = vfio_pci_liveupdate_prepare,
+	.freeze = vfio_pci_liveupdate_freeze,
 	.cancel = vfio_pci_liveupdate_cancel,
 	.finish = vfio_pci_liveupdate_finish,
 	.retrieve = vfio_pci_liveupdate_retrieve,
