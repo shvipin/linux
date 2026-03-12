@@ -1096,6 +1096,8 @@ extern struct iommu_group *generic_device_group(struct device *dev);
 struct iommu_group *fsl_mc_device_group(struct device *dev);
 extern struct iommu_group *generic_single_device_group(struct device *dev);
 
+bool pci_device_group_immutable_singleton(struct pci_dev *dev);
+
 /**
  * struct iommu_fwspec - per-device IOMMU instance data
  * @iommu_fwnode: firmware handle for this device's IOMMU
@@ -1527,6 +1529,11 @@ static inline int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 
 static inline void pci_dev_reset_iommu_done(struct pci_dev *pdev)
 {
+}
+
+static inline bool pci_device_group_immutable_singleton(struct pci_dev *dev)
+{
+	return false;
 }
 #endif /* CONFIG_IOMMU_API */
 
