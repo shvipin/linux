@@ -1063,6 +1063,7 @@
 	*(.no_trim_symbol)						\
 	/* ld.bfd warns about .gnu.version* even when not emitted */	\
 	*(.gnu.version*)						\
+	*(.sframe) *(.sframe.*)						\
 	*(__tracepoint_check)						\
 
 #define DISCARDS							\
