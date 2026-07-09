@@ -1549,6 +1549,23 @@ void vfio_file_set_kvm(struct file *file, struct kvm *kvm)
 }
 EXPORT_SYMBOL_GPL(vfio_file_set_kvm);
 
+/**
+ * vfio_file_set_access_granted - Set or revoke device access for a VFIO device file
+ * @file: VFIO device file
+ * @access_granted: True to grant access, false to revoke
+ */
+void vfio_file_set_access_granted(struct file *file, bool access_granted)
+{
+	struct vfio_device_file *df;
+
+	if (file->f_op != &vfio_device_fops)
+		return;
+
+	df = file->private_data;
+	smp_store_release(&df->access_granted, access_granted);
+}
+EXPORT_SYMBOL_GPL(vfio_file_set_access_granted);
+
 /*
  * Sub-module support
  */
