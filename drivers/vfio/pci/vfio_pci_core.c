@@ -623,7 +623,7 @@ out_power:
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_enable);
 
-static int vfio_pci_core_try_reset(struct vfio_pci_core_device *vdev)
+int vfio_pci_core_try_reset(struct vfio_pci_core_device *vdev)
 {
 	struct pci_dev *pdev = vdev->pdev;
 	struct pci_dev *bridge;
@@ -677,6 +677,7 @@ out_restore_state:
 	pci_restore_state(pdev);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(vfio_pci_core_try_reset);
 
 void vfio_pci_core_disable(struct vfio_pci_core_device *vdev)
 {
@@ -1660,7 +1661,7 @@ ssize_t vfio_pci_core_write(struct vfio_device *core_vdev, const char __user *bu
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_write);
 
-static void vfio_pci_zap_bars(struct vfio_pci_core_device *vdev)
+void vfio_pci_zap_bars(struct vfio_pci_core_device *vdev)
 {
 	struct vfio_device *core_vdev = &vdev->vdev;
 	loff_t start = VFIO_PCI_INDEX_TO_OFFSET(VFIO_PCI_BAR0_REGION_INDEX);
@@ -1669,6 +1670,7 @@ static void vfio_pci_zap_bars(struct vfio_pci_core_device *vdev)
 
 	unmap_mapping_range(core_vdev->inode->i_mapping, start, len, true);
 }
+EXPORT_SYMBOL_GPL(vfio_pci_zap_bars);
 
 void vfio_pci_zap_and_down_write_memory_lock(struct vfio_pci_core_device *vdev)
 {
