@@ -623,10 +623,11 @@ out_power:
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_enable);
 
-static void vfio_pci_core_try_reset(struct vfio_pci_core_device *vdev)
+static int vfio_pci_core_try_reset(struct vfio_pci_core_device *vdev)
 {
 	struct pci_dev *pdev = vdev->pdev;
 	struct pci_dev *bridge;
+	int ret;
 
 	vdev->needs_reset = true;
 
@@ -636,11 +637,12 @@ static void vfio_pci_core_try_reset(struct vfio_pci_core_device *vdev)
 	 * nothing, but saving and restoring current state without reset
 	 * is just busy work.
 	 */
-	if (pci_load_and_free_saved_state(pdev, &vdev->pci_saved_state)) {
+	ret = pci_load_and_free_saved_state(pdev, &vdev->pci_saved_state);
+	if (ret) {
 		pci_info(pdev, "%s: Couldn't reload saved state\n", __func__);
 
 		if (!vdev->reset_works)
-			return;
+			return ret;
 
 		pci_save_state(pdev);
 	}
@@ -673,6 +675,7 @@ static void vfio_pci_core_try_reset(struct vfio_pci_core_device *vdev)
 
 out_restore_state:
 	pci_restore_state(pdev);
+	return 0;
 }
 
 void vfio_pci_core_disable(struct vfio_pci_core_device *vdev)
@@ -753,7 +756,7 @@ void vfio_pci_core_disable(struct vfio_pci_core_device *vdev)
 
 	vfio_pci_zdev_close_device(vdev);
 
-	vfio_pci_core_try_reset(vdev);
+	(void)vfio_pci_core_try_reset(vdev);
 	pci_disable_device(pdev);
 
 	vfio_pci_dev_set_try_reset(vdev->vdev.dev_set);
