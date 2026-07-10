@@ -39,7 +39,13 @@
  *    preserved, so there is no way for the file to be destroyed or the device
  *    to be unbound from the vfio-pci driver while it is preserved.
  *
- * Retrieving the file after kexec is not yet supported.
+ * After kexec, the preserved VFIO device file can be retrieved from the session
+ * just like any other preserved file::
+ *
+ *   ioctl(session_fd, LIVEUPDATE_SESSION_RETRIEVE_FD, &arg);
+ *   device_fd = arg.fd;
+ *   ...
+ *   ioctl(session_fd, LIVEUPDATE_SESSION_FINISH, ...);
  *
  * Restrictions
  * ============
@@ -93,6 +99,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/errno.h>
+#include <linux/file.h>
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/vfio_pci.h>
 #include <linux/liveupdate.h>
@@ -231,13 +238,81 @@ static int vfio_pci_liveupdate_freeze(struct liveupdate_file_op_args *args)
 	return 0;
 }
 
+static int match_device(struct device *dev, const void *arg)
+{
+	struct vfio_device *device = container_of(dev, struct vfio_device, device);
+	const struct vfio_pci_core_device_ser *ser = arg;
+	struct pci_dev *pdev;
+
+	pdev = dev_is_pci(device->dev) ? to_pci_dev(device->dev) : NULL;
+	if (!pdev)
+		return false;
+
+	return ser->bdf == pci_dev_id(pdev) && ser->domain == pci_domain_nr(pdev->bus);
+}
+
 static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
-	return -EOPNOTSUPP;
+	struct vfio_pci_core_device_ser *ser;
+	struct vfio_device *device;
+	struct file *file;
+	int ret = 0;
+
+	ser = phys_to_virt(args->serialized_data);
+
+	device = vfio_find_device(ser, match_device);
+	if (!device) {
+		ret = -ENODEV;
+		goto err_free_ser;
+	}
+
+	file = vfio_device_liveupdate_cdev_open(device);
+	if (IS_ERR(file)) {
+		ret = PTR_ERR(file);
+		goto err_pci_cleanup;
+	}
+
+	args->file = file;
+	/* Drop the reference from vfio_find_device() */
+	put_device(&device->device);
+	return 0;
+
+err_pci_cleanup:
+	pci_liveupdate_cleanup_device(to_pci_dev(device->dev));
+	put_device(&device->device);
+err_free_ser:
+	kho_restore_free(ser);
+	return ret;
 }
 
 static void vfio_pci_liveupdate_finish(struct liveupdate_file_op_args *args)
 {
+	struct vfio_pci_core_device_ser *ser;
+	struct vfio_device *device;
+
+	/* Errored out file was cleaned up in retrieve(). Nothing to do.*/
+	if (args->retrieve_status < 0)
+		return;
+
+	ser = phys_to_virt(args->serialized_data);
+
+	if (!args->retrieve_status) {
+		/*
+		 * Userspace didn't retrieve the file. Reset the device.
+		 */
+		device = vfio_find_device(ser, match_device);
+		if (!device)
+			goto out_free_ser;
+		pci_try_reset_function(to_pci_dev(device->dev));
+		put_device(&device->device);
+	} else {
+		device = vfio_device_from_file(args->file);
+	}
+
+	pci_liveupdate_finish(to_pci_dev(device->dev));
+
+out_free_ser:
+	kho_restore_free(ser);
 }
 
 static const struct liveupdate_file_ops vfio_pci_liveupdate_file_ops = {
