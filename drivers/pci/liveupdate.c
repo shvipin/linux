@@ -726,6 +726,7 @@ void pci_liveupdate_cleanup_device(struct pci_dev *dev)
 		pci_liveupdate_flb_put_incoming();
 	}
 }
+EXPORT_SYMBOL_GPL(pci_liveupdate_cleanup_device);
 
 void pci_liveupdate_freeze(struct pci_dev *dev)
 {

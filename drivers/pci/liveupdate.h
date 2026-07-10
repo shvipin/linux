@@ -12,7 +12,6 @@
 
 #ifdef CONFIG_PCI_LIVEUPDATE
 void pci_liveupdate_setup_device(struct pci_dev *dev);
-void pci_liveupdate_cleanup_device(struct pci_dev *dev);
 void pci_liveupdate_freeze(struct pci_dev *dev);
 bool pci_liveupdate_scan_bridge_begin(struct pci_bus *bus, struct pci_dev *dev,
 				      int pass);
@@ -23,10 +22,6 @@ int pci_liveupdate_configure_ari(struct pci_dev *dev);
 bool pci_liveupdate_is_outgoing(struct pci_dev *dev);
 #else
 static inline void pci_liveupdate_setup_device(struct pci_dev *dev)
-{
-}
-
-static inline void pci_liveupdate_cleanup_device(struct pci_dev *dev)
 {
 }
 
