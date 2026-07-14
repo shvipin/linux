@@ -16,6 +16,8 @@ struct iommu_mode {
 	bool noiommu;
 };
 
+extern const struct iommu_mode iommu_modes[];
+extern const int nr_iommu_modes;
 extern const char *default_iommu_mode;
 
 struct dma_region {
