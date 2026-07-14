@@ -154,6 +154,21 @@ static inline void vfio_pci_dma_buf_move(struct vfio_pci_core_device *vdev,
 #ifdef CONFIG_VFIO_PCI_LIVEUPDATE
 int __init vfio_pci_liveupdate_init(void);
 void vfio_pci_liveupdate_cleanup(void);
+static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
+{
+	/* Written in VFIO PCI Liveupdate during freeze() event */
+	return smp_load_acquire(&vdev->liveupdate_frozen);
+}
+
+/*
+ * Called on first open of the device. A device frozen by a Live Update that
+ * was later aborted stays frozen until all references to its file are dropped,
+ * so a fresh open starts with a usable device.
+ */
+static inline void vfio_pci_dev_clear_frozen(struct vfio_pci_core_device *vdev)
+{
+	WRITE_ONCE(vdev->liveupdate_frozen, false);
+}
 #else
 static inline int vfio_pci_liveupdate_init(void)
 {
@@ -161,6 +176,14 @@ static inline int vfio_pci_liveupdate_init(void)
 }
 
 static inline void vfio_pci_liveupdate_cleanup(void)
+{
+}
+static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
+{
+	return false;
+}
+
+static inline void vfio_pci_dev_clear_frozen(struct vfio_pci_core_device *vdev)
 {
 }
 #endif /* CONFIG_VFIO_PCI_LIVEUPDATE */
