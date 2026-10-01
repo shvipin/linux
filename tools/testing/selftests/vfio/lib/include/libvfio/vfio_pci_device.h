@@ -151,6 +151,12 @@ static inline bool vfio_pci_device_match(struct vfio_pci_device *device,
 		(device_id == vfio_pci_config_readw(device, PCI_DEVICE_ID));
 }
 
+/*
+ * Return the path to the VFIO cdev of @bdf, or NULL if it has none. The cdev of
+ * a device bound to vfio-pci in noiommu mode is named noiommu-vfioX instead of
+ * vfioX, and is only returned if @noiommu is true. Free with free().
+ */
+const char *__vfio_pci_get_cdev_path(const char *bdf, bool noiommu);
 const char *vfio_pci_get_cdev_path(const char *bdf);
 
 void vfio_pci_group_setup(struct vfio_pci_device *device, const char *bdf);

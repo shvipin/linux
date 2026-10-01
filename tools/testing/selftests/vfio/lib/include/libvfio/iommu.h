@@ -13,6 +13,7 @@ struct iommu_mode {
 	const char *name;
 	const char *container_path;
 	unsigned long iommu_type;
+	bool noiommu;
 };
 
 extern const char *default_iommu_mode;
@@ -59,6 +60,14 @@ static inline void iommu_unmap_all(struct iommu *iommu)
 int __iommu_hva2iova(struct iommu *iommu, void *vaddr, iova_t *iova);
 iova_t iommu_hva2iova(struct iommu *iommu, void *vaddr);
 
+/*
+ * Look up the physical address backing @iova in a noiommu IOAS. On success,
+ * @length is the number of physically contiguous bytes starting at @pa, capped
+ * at @max_length. Returns -errno on failure.
+ */
+int __iommu_noiommu_get_pa(struct iommu *iommu, iova_t iova, u64 max_length,
+			   u64 *pa, u64 *length);
+
 struct iommu_iova_range *iommu_iova_ranges(struct iommu *iommu, u32 *nranges);
 
 #define MODE_VFIO_TYPE1_IOMMU "vfio_type1_iommu"
@@ -66,6 +75,13 @@ struct iommu_iova_range *iommu_iova_ranges(struct iommu *iommu, u32 *nranges);
 #define MODE_IOMMUFD_COMPAT_TYPE1 "iommufd_compat_type1"
 #define MODE_IOMMUFD_COMPAT_TYPE1V2 "iommufd_compat_type1v2"
 #define MODE_IOMMUFD "iommufd"
+
+/*
+ * iommufd with a device that is bound to vfio-pci in noiommu mode, i.e. it is
+ * not behind an IOMMU and DMAs to physical addresses. Not part of
+ * FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES() since tests must opt in to it.
+ */
+#define MODE_IOMMUFD_NOIOMMU "iommufd_noiommu"
 
 /*
  * Generator for VFIO selftests fixture variants that replicate across all

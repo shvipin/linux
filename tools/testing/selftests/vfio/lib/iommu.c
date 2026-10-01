@@ -47,6 +47,11 @@ static const struct iommu_mode iommu_modes[] = {
 	{
 		.name = MODE_IOMMUFD,
 	},
+	{
+		/* Not in FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES(), see iommu.h. */
+		.name = MODE_IOMMUFD_NOIOMMU,
+		.noiommu = true,
+	},
 };
 
 static const struct iommu_mode *lookup_iommu_mode(const char *iommu_mode)
@@ -95,6 +100,24 @@ iova_t iommu_hva2iova(struct iommu *iommu, void *vaddr)
 	VFIO_ASSERT_EQ(ret, 0, "%p is not mapped into the iommu\n", vaddr);
 
 	return iova;
+}
+
+int __iommu_noiommu_get_pa(struct iommu *iommu, iova_t iova, u64 max_length,
+			   u64 *pa, u64 *length)
+{
+	struct iommu_ioas_noiommu_get_pa args = {
+		.size = sizeof(args),
+		.ioas_id = iommu->ioas_id,
+		.iova = iova,
+		.length = max_length,
+	};
+
+	if (ioctl(iommu->iommufd, IOMMU_IOAS_NOIOMMU_GET_PA, &args))
+		return -errno;
+
+	*pa = args.out_phys;
+	*length = args.length;
+	return 0;
 }
 
 static int vfio_iommu_map(struct iommu *iommu, struct dma_region *region)
