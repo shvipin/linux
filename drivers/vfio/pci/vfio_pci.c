@@ -143,6 +143,17 @@ static int vfio_pci_init_dev(struct vfio_device *core_vdev)
 	vdev->disable_vga = disable_vga;
 #endif
 
+	/*
+	 * Keep devices preserved by the previous kernel in D0 if they are going
+	 * to be in noiommu mode, i.e. are not behind an IOMMU, as they may have
+	 * been kept running across the Live Update. vdev->vdev.noiommu is only
+	 * set when the device is registered, after runtime PM is enabled.
+	 */
+	if (IS_ENABLED(CONFIG_IOMMUFD_NOIOMMU) &&
+	    !device_iommu_mapped(core_vdev->dev) &&
+	    pci_liveupdate_is_incoming(to_pci_dev(core_vdev->dev)))
+		vdev->disable_idle_d3 = true;
+
 	return vfio_pci_core_init_dev(core_vdev);
 }
 

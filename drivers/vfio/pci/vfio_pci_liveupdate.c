@@ -110,9 +110,13 @@
 #include <linux/kho/abi/vfio_pci.h>
 #include <linux/liveupdate.h>
 #include <linux/module.h>
+#include <linux/pci_liveupdate.h>
+#include <linux/slab.h>
 #include <linux/vfio.h>
 
 #include "vfio_pci_priv.h"
+
+static_assert(VFIO_PCI_SER_CFG_SPACE_SIZE == PCI_CFG_SPACE_EXP_SIZE);
 
 static bool vfio_pci_liveupdate_can_preserve(struct liveupdate_file_handler *handler,
 					     struct file *file)
@@ -244,16 +248,17 @@ static int match_device(struct device *dev, const void *arg)
 	const struct vfio_pci_core_device_ser *ser = arg;
 	struct pci_dev *pdev;
 
-	pdev = dev_is_pci(device->dev) ? to_pci_dev(device->dev) : NULL;
-	if (!pdev)
+	if (device->ops != &vfio_pci_ops)
 		return false;
 
+	pdev = to_pci_dev(device->dev);
 	return ser->bdf == pci_dev_id(pdev) && ser->domain == pci_domain_nr(pdev->bus);
 }
 
 static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
 	struct vfio_pci_core_device_ser *ser;
+	struct vfio_pci_core_device *vdev;
 	struct vfio_device *device;
 	struct file *file;
 	int ret = 0;
@@ -268,6 +273,19 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 	if (IS_ERR(file)) {
 		ret = PTR_ERR(file);
 		goto out;
+	}
+
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+
+	/* The first open of the device takes over the device, see there. */
+	scoped_guard(mutex, &device->dev_set->lock) {
+		if ((ser->flags & VFIO_PCI_SER_F_RUNNING) &&
+		    !vfio_pci_liveupdate_keep_running(vdev)) {
+			pci_warn(vdev->pdev, "Resetting device kept running across Live Update, not in noiommu mode\n");
+			ser->flags &= ~VFIO_PCI_SER_F_RUNNING;
+		}
+
+		vdev->liveupdate_incoming = ser;
 	}
 
 	args->file = file;
@@ -291,10 +309,21 @@ static bool vfio_pci_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 
 static void vfio_pci_liveupdate_finish(struct liveupdate_file_op_args *args)
 {
+	struct vfio_pci_core_device_ser *ser = phys_to_virt(args->serialized_data);
 	struct vfio_device *device = vfio_device_from_file(args->file);
+	struct vfio_pci_core_device *vdev;
+
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+
+	scoped_guard(mutex, &device->dev_set->lock)
+		vdev->liveupdate_incoming = NULL;
+
+	/* Free the saved state if the device was not taken over. */
+	if (ser->saved_state)
+		kfree(pci_liveupdate_restore_saved_state(ser->saved_state));
 
 	pci_liveupdate_finish(to_pci_dev(device->dev));
-	kho_restore_free(phys_to_virt(args->serialized_data));
+	kho_restore_free(ser);
 }
 
 static const struct liveupdate_file_ops vfio_pci_liveupdate_file_ops = {

@@ -1868,6 +1868,52 @@ void vfio_config_free(struct vfio_pci_core_device *vdev)
 	}
 }
 
+#ifdef CONFIG_VFIO_PCI_LIVEUPDATE
+/*
+ * Restore the virtualized config space of a device that the previous kernel
+ * kept running across a Live Update, so that userspace keeps seeing the config
+ * space it programmed before the kexec. Must be called right after
+ * vfio_config_init().
+ *
+ * vfio_config_init() rebuilt the capability map from the device. The device
+ * was not reset, so this must yield the map the previous kernel built, or else
+ * this kernel virtualizes config space differently and the preserved vconfig
+ * cannot be used.
+ */
+int vfio_pci_liveupdate_restore_config(struct vfio_pci_core_device *vdev,
+				       struct vfio_pci_core_device_ser *ser)
+{
+	struct pci_dev *pdev = vdev->pdev;
+	u16 cmd;
+
+	if (ser->cfg_size != pdev->cfg_size ||
+	    memcmp(ser->pci_config_map, vdev->pci_config_map, pdev->cfg_size)) {
+		pci_err(pdev, "Config space layout changed across Live Update\n");
+		return -EINVAL;
+	}
+
+	memcpy(vdev->vconfig, ser->vconfig, pdev->cfg_size);
+
+	/*
+	 * Userspace may have written to the BARs after they were last
+	 * sanitized, so sanitize them again on the next read.
+	 */
+	vdev->bardirty = true;
+
+	/*
+	 * Emulate the INTx disable bit as userspace left it, like
+	 * vfio_basic_config_write() does. INTx is not in use yet, so the
+	 * physical bit just follows it.
+	 */
+	cmd = le16_to_cpu(*(__le16 *)&vdev->vconfig[PCI_COMMAND]);
+	vdev->virq_disabled = !!(cmd & PCI_COMMAND_INTX_DISABLE);
+	if (vdev->pci_2_3)
+		pci_intx(pdev, !vdev->virq_disabled);
+
+	return 0;
+}
+#endif
+
 /*
  * Find the remaining number of bytes in a dword that match the given
  * position.  Stop at either the end of the capability or the dword boundary.

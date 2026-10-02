@@ -22,6 +22,7 @@
 #include <linux/notifier.h>
 #include <linux/pagemap.h>
 #include <linux/pci.h>
+#include <linux/pci_liveupdate.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
 #include <linux/types.h>
@@ -588,8 +589,33 @@ static const struct dev_pm_ops vfio_pci_core_pm_ops = {
 			   NULL)
 };
 
+/*
+ * Take over a device that the previous kernel kept running across a Live
+ * Update, instead of resetting it, since it may still be doing DMA that
+ * userspace set up before the kexec. Like the previous kernel would have, use
+ * the state it saved when it first opened the device to restore the device when
+ * userspace is done with it.
+ */
+static void vfio_pci_core_liveupdate_take_over(struct vfio_pci_core_device *vdev,
+					       struct vfio_pci_core_device_ser *ser)
+{
+	/* Only the first open takes over the device, any later one resets it. */
+	ser->flags &= ~VFIO_PCI_SER_F_RUNNING;
+
+	vdev->reset_works = ser->reset_works;
+	if (ser->saved_state) {
+		vdev->pci_saved_state =
+			pci_liveupdate_restore_saved_state(ser->saved_state);
+		ser->saved_state = 0;
+	}
+
+	if (!vdev->pci_saved_state)
+		pci_dbg(vdev->pdev, "%s: Couldn't restore saved state\n", __func__);
+}
+
 int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 {
+	struct vfio_pci_core_device_ser *lu_ser = vfio_pci_liveupdate_running(vdev);
 	struct pci_dev *pdev = vdev->pdev;
 	int ret;
 	u16 cmd;
@@ -603,23 +629,31 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 			return ret;
 	}
 
-	/* Don't allow our initial saved state to include busmaster */
-	pci_clear_master(pdev);
+	/*
+	 * Don't allow our initial saved state to include busmaster, unless the
+	 * device is taken over from the previous kernel, which saved its state.
+	 */
+	if (!lu_ser)
+		pci_clear_master(pdev);
 
 	ret = pci_enable_device(pdev);
 	if (ret)
 		goto out_power;
 
-	/* If reset fails because of the device lock, fail this path entirely */
-	ret = pci_try_reset_function(pdev);
-	if (ret == -EAGAIN)
-		goto out_disable_device;
+	if (lu_ser) {
+		vfio_pci_core_liveupdate_take_over(vdev, lu_ser);
+	} else {
+		/* If reset fails because of the device lock, fail this path entirely */
+		ret = pci_try_reset_function(pdev);
+		if (ret == -EAGAIN)
+			goto out_disable_device;
 
-	vdev->reset_works = !ret;
-	pci_save_state(pdev);
-	vdev->pci_saved_state = pci_store_saved_state(pdev);
-	if (!vdev->pci_saved_state)
-		pci_dbg(pdev, "%s: Couldn't store saved state\n", __func__);
+		vdev->reset_works = !ret;
+		pci_save_state(pdev);
+		vdev->pci_saved_state = pci_store_saved_state(pdev);
+		if (!vdev->pci_saved_state)
+			pci_dbg(pdev, "%s: Couldn't store saved state\n", __func__);
+	}
 
 	if (likely(!vdev->nointxmask)) {
 		if (vfio_pci_nointx(pdev)) {
@@ -630,8 +664,12 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 			vdev->pci_2_3 = pci_intx_mask_supported(pdev);
 	}
 
+	/*
+	 * A device taken over from the previous kernel gets the INTx disable
+	 * bit userspace left, see vfio_pci_liveupdate_restore_config().
+	 */
 	pci_read_config_word(pdev, PCI_COMMAND, &cmd);
-	if (vdev->pci_2_3 && (cmd & PCI_COMMAND_INTX_DISABLE)) {
+	if (vdev->pci_2_3 && !lu_ser && (cmd & PCI_COMMAND_INTX_DISABLE)) {
 		cmd &= ~PCI_COMMAND_INTX_DISABLE;
 		pci_write_config_word(pdev, PCI_COMMAND, cmd);
 	}
@@ -643,6 +681,12 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 	ret = vfio_config_init(vdev);
 	if (ret)
 		goto out_free_zdev;
+
+	if (lu_ser) {
+		ret = vfio_pci_liveupdate_restore_config(vdev, lu_ser);
+		if (ret)
+			goto out_free_config;
+	}
 
 	msix_pos = pdev->msix_cap;
 	if (msix_pos) {
@@ -668,6 +712,8 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 
 	return 0;
 
+out_free_config:
+	vfio_config_free(vdev);
 out_free_zdev:
 	vfio_pci_zdev_close_device(vdev);
 out_free_state:
@@ -2653,8 +2699,19 @@ static bool vfio_pci_dev_set_needs_reset(struct vfio_device_set *dev_set)
 	if (vfio_device_set_open_count(dev_set) > 1)
 		return false;
 
-	list_for_each_entry(cur, &dev_set->device_list, vdev.dev_set_list)
+	list_for_each_entry(cur, &dev_set->device_list, vdev.dev_set_list) {
+		/*
+		 * Devices in noiommu mode preserved by the previous kernel may
+		 * have been kept running across the Live Update, don't reset
+		 * them under the feet of the userspace that is taking them
+		 * over.
+		 */
+		if (vfio_pci_liveupdate_keep_running(cur) &&
+		    pci_liveupdate_is_incoming(cur->pdev))
+			return false;
+
 		needs_reset |= cur->needs_reset;
+	}
 	return needs_reset;
 }
 

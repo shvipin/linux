@@ -2,6 +2,7 @@
 #ifndef VFIO_PCI_PRIV_H
 #define VFIO_PCI_PRIV_H
 
+#include <linux/kho/abi/vfio_pci.h>
 #include <linux/vfio_pci_core.h>
 
 /* Special capability IDs predefined access */
@@ -154,6 +155,9 @@ static inline void vfio_pci_dma_buf_move(struct vfio_pci_core_device *vdev,
 #ifdef CONFIG_VFIO_PCI_LIVEUPDATE
 int __init vfio_pci_liveupdate_init(void);
 void vfio_pci_liveupdate_cleanup(void);
+int vfio_pci_liveupdate_restore_config(struct vfio_pci_core_device *vdev,
+				       struct vfio_pci_core_device_ser *ser);
+
 static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
 {
 	/* Written in VFIO PCI Liveupdate during freeze() event */
@@ -169,6 +173,35 @@ static inline void vfio_pci_dev_clear_frozen(struct vfio_pci_core_device *vdev)
 {
 	WRITE_ONCE(vdev->liveupdate_frozen, false);
 }
+
+/*
+ * Returns the state preserved by the previous kernel if it kept the device
+ * running across the Live Update and userspace has yet to take it over, NULL
+ * otherwise.
+ */
+static inline struct vfio_pci_core_device_ser *
+vfio_pci_liveupdate_running(struct vfio_pci_core_device *vdev)
+{
+	struct vfio_pci_core_device_ser *ser = vdev->liveupdate_incoming;
+
+	lockdep_assert_held(&vdev->vdev.dev_set->lock);
+
+	if (ser && (ser->flags & VFIO_PCI_SER_F_RUNNING))
+		return ser;
+
+	return NULL;
+}
+
+/*
+ * Devices are only kept running across Live Update, i.e. allowed to keep doing
+ * DMA, in noiommu mode, where they DMA to physical addresses. Otherwise their
+ * IOMMU mappings would have to be preserved as well, which is not supported.
+ */
+static inline bool
+vfio_pci_liveupdate_keep_running(struct vfio_pci_core_device *vdev)
+{
+	return IS_ENABLED(CONFIG_IOMMUFD_NOIOMMU) && vdev->vdev.noiommu;
+}
 #else
 static inline int vfio_pci_liveupdate_init(void)
 {
@@ -178,6 +211,14 @@ static inline int vfio_pci_liveupdate_init(void)
 static inline void vfio_pci_liveupdate_cleanup(void)
 {
 }
+
+static inline int
+vfio_pci_liveupdate_restore_config(struct vfio_pci_core_device *vdev,
+				   struct vfio_pci_core_device_ser *ser)
+{
+	return -EOPNOTSUPP;
+}
+
 static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
 {
 	return false;
@@ -185,6 +226,18 @@ static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
 
 static inline void vfio_pci_dev_clear_frozen(struct vfio_pci_core_device *vdev)
 {
+}
+
+static inline struct vfio_pci_core_device_ser *
+vfio_pci_liveupdate_running(struct vfio_pci_core_device *vdev)
+{
+	return NULL;
+}
+
+static inline bool
+vfio_pci_liveupdate_keep_running(struct vfio_pci_core_device *vdev)
+{
+	return false;
 }
 #endif /* CONFIG_VFIO_PCI_LIVEUPDATE */
 
