@@ -1013,3 +1013,116 @@ void pci_liveupdate_unregister_flb(struct liveupdate_file_handler *fh)
 	liveupdate_unregister_flb(fh, &pci_liveupdate_flb);
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_unregister_flb);
+
+static struct pci_cap_saved_data *pci_saved_cap_next(struct pci_cap_saved_data *cap)
+{
+	return (void *)cap + sizeof(*cap) + cap->size;
+}
+
+static struct pci_cap_saved_data_ser *
+pci_saved_cap_ser_next(struct pci_cap_saved_data_ser *cap)
+{
+	return (void *)cap + sizeof(*cap) + cap->size;
+}
+
+/**
+ * pci_liveupdate_preserve_saved_state() - Preserve a saved state for the next
+ * kernel
+ * @state: The saved state, as returned by pci_store_saved_state().
+ * @phys: Set to the physical address of the preserved copy on success.
+ *
+ * Drivers that keep a device running across Live Update can use this to hand
+ * the state captured by pci_store_saved_state() (e.g. before the device was
+ * handed to userspace) to the next kernel, which never gets to see the device
+ * in that state. The next kernel must consume @phys exactly once with
+ * pci_liveupdate_restore_saved_state().
+ *
+ * Return: 0 on success, <0 on failure.
+ */
+int pci_liveupdate_preserve_saved_state(struct pci_saved_state *state, u64 *phys)
+{
+	struct pci_cap_saved_data_ser *cap_ser;
+	struct pci_cap_saved_data *cap;
+	struct pci_saved_state_ser *ser;
+	size_t size;
+
+	/* One empty capability terminates the list. */
+	size = sizeof(*ser) + sizeof(*cap_ser);
+	for (cap = state->cap; cap->size; cap = pci_saved_cap_next(cap))
+		size += sizeof(*cap_ser) + cap->size;
+
+	ser = kho_alloc_preserve(size);
+	if (IS_ERR(ser))
+		return PTR_ERR(ser);
+
+	memcpy(ser->config_space, state->config_space, sizeof(ser->config_space));
+
+	cap_ser = ser->cap;
+	for (cap = state->cap; cap->size; cap = pci_saved_cap_next(cap)) {
+		cap_ser->cap_nr = cap->cap_nr;
+		cap_ser->cap_extended = cap->cap_extended;
+		cap_ser->size = cap->size;
+		memcpy(cap_ser->data, cap->data, cap->size);
+		cap_ser = pci_saved_cap_ser_next(cap_ser);
+	}
+
+	*phys = virt_to_phys(ser);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_preserve_saved_state);
+
+/**
+ * pci_liveupdate_unpreserve_saved_state() - Undo
+ * pci_liveupdate_preserve_saved_state()
+ * @phys: The physical address returned by pci_liveupdate_preserve_saved_state().
+ */
+void pci_liveupdate_unpreserve_saved_state(u64 phys)
+{
+	kho_unpreserve_free(phys_to_virt(phys));
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_unpreserve_saved_state);
+
+/**
+ * pci_liveupdate_restore_saved_state() - Restore a saved state preserved by the
+ * previous kernel
+ * @phys: The physical address handed over by the previous kernel's
+ *        pci_liveupdate_preserve_saved_state().
+ *
+ * Consumes @phys, i.e. the preserved copy is freed even on failure. Callers
+ * that do not need the saved state can just kfree() the return value.
+ *
+ * Return: A saved state that, like one returned by pci_store_saved_state(), can
+ * be passed to pci_load_saved_state() and must be freed with kfree(), or NULL
+ * on failure.
+ */
+struct pci_saved_state *pci_liveupdate_restore_saved_state(u64 phys)
+{
+	struct pci_saved_state_ser *ser = phys_to_virt(phys);
+	struct pci_cap_saved_data_ser *cap_ser;
+	struct pci_cap_saved_data *cap;
+	struct pci_saved_state *state;
+	size_t size;
+
+	size = sizeof(*state) + sizeof(*cap);
+	for (cap_ser = ser->cap; cap_ser->size; cap_ser = pci_saved_cap_ser_next(cap_ser))
+		size += sizeof(*cap) + cap_ser->size;
+
+	state = kzalloc(size, GFP_KERNEL);
+	if (!state)
+		goto out;
+
+	memcpy(state->config_space, ser->config_space, sizeof(state->config_space));
+
+	cap = state->cap;
+	for (cap_ser = ser->cap; cap_ser->size; cap_ser = pci_saved_cap_ser_next(cap_ser)) {
+		cap->cap_nr = cap_ser->cap_nr;
+		cap->cap_extended = cap_ser->cap_extended;
+		cap->size = cap_ser->size;
+		memcpy(cap->data, cap_ser->data, cap->size);
+		cap = pci_saved_cap_next(cap);
+	}
+out:
+	kho_restore_free(ser);
+	return state;
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_restore_saved_state);

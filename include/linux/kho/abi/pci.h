@@ -63,4 +63,37 @@ struct pci_ser {
 	u64 devices;
 } __packed;
 
+/**
+ * struct pci_cap_saved_data_ser - Serialized state of one saved capability.
+ *
+ * @cap_nr: The capability ID.
+ * @cap_extended: 1 if @cap_nr is an extended capability ID, 0 otherwise.
+ * @reserved: Must be zero.
+ * @size: Size of @data in bytes. An entry with a zero @size ends the list.
+ * @data: The saved capability registers.
+ */
+struct pci_cap_saved_data_ser {
+	u16 cap_nr;
+	u8 cap_extended;
+	u8 reserved;
+	u32 size;
+	u32 data[];
+} __packed;
+
+/**
+ * struct pci_saved_state_ser - Serialized struct pci_saved_state.
+ *
+ * Used by drivers to hand the state returned by pci_store_saved_state() to the
+ * next kernel, see pci_liveupdate_preserve_saved_state(). The layout is part of
+ * the ABI of the driver that embeds it, so any change to it requires a version
+ * bump of that driver's file handler compatible string.
+ *
+ * @config_space: The saved standard configuration header.
+ * @cap: The saved capabilities, terminated by an entry with a zero size.
+ */
+struct pci_saved_state_ser {
+	u32 config_space[16];
+	struct pci_cap_saved_data_ser cap[];
+} __packed;
+
 #endif /* _LINUX_KHO_ABI_PCI_H */
