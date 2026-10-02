@@ -29,6 +29,16 @@ struct vfio_pci_driver_ops {
 	void (*remove)(struct vfio_pci_device *device);
 
 	/**
+	 * attach() - Take over @device as initialized by init(), e.g. by
+	 * another process before a Live Update, without resetting it. Any
+	 * memcpy operations started then keep going. Optional.
+	 *
+	 * Must be called after device->driver.region has been initialized to
+	 * map the same memory at the same IOVAs as when init() was called.
+	 */
+	void (*attach)(struct vfio_pci_device *device);
+
+	/**
 	 * memcpy_start() - Kick off @count repeated memcpy operations from
 	 * [@src, @src + @size) to [@dst, @dst + @size).
 	 *
@@ -85,6 +95,8 @@ struct vfio_pci_driver {
 
 void vfio_pci_driver_probe(struct vfio_pci_device *device);
 void vfio_pci_driver_init(struct vfio_pci_device *device);
+void vfio_pci_driver_attach(struct vfio_pci_device *device,
+			    bool memcpy_in_progress);
 void vfio_pci_driver_remove(struct vfio_pci_device *device);
 int vfio_pci_driver_memcpy(struct vfio_pci_device *device,
 			   iova_t src, iova_t dst, u64 size);

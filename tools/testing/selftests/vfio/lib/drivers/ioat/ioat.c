@@ -125,6 +125,25 @@ static void ioat_init(struct vfio_pci_device *device)
 	device->driver.max_memcpy_count = IOAT_DMACOUNT_MAX;
 }
 
+static void ioat_attach(struct vfio_pci_device *device)
+{
+	struct ioat_state *ioat = to_ioat_state(device);
+
+	VFIO_ASSERT_GE(device->driver.region.size, sizeof(*ioat));
+
+	/*
+	 * The device is still set up as ioat_init() left it, and the driver
+	 * keeps no pointers into BAR0, so only MSI-X and the driver limits
+	 * need to be set up.
+	 */
+	vfio_pci_msix_enable(device, 0, device->msix_info.count);
+
+	device->driver.msi = 0;
+	device->driver.max_memcpy_size =
+		1UL << readb(device->bars[0].vaddr + IOAT_XFERCAP_OFFSET);
+	device->driver.max_memcpy_count = IOAT_DMACOUNT_MAX;
+}
+
 static void ioat_remove(struct vfio_pci_device *device)
 {
 	ioat_reset(device);
@@ -229,6 +248,7 @@ const struct vfio_pci_driver_ops ioat_ops = {
 	.probe = ioat_probe,
 	.init = ioat_init,
 	.remove = ioat_remove,
+	.attach = ioat_attach,
 	.memcpy_start = ioat_memcpy_start,
 	.memcpy_wait = ioat_memcpy_wait,
 	.send_msi = ioat_send_msi,

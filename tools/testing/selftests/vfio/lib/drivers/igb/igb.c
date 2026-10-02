@@ -400,6 +400,26 @@ static void igb_init(struct vfio_pci_device *device)
 	igb_hw_init(device);
 }
 
+static void igb_attach(struct vfio_pci_device *device)
+{
+	struct igb *igb = to_igb_state(device);
+
+	VFIO_ASSERT_GE(device->driver.region.size, sizeof(struct igb));
+
+	/*
+	 * The device, its rings and the ring tails are still as igb_init() and
+	 * igb_memcpy_start() left them, but BAR0 may be mapped at a different
+	 * address now.
+	 */
+	igb->bar0 = device->bars[0].vaddr;
+
+	vfio_pci_msix_enable(device, MSIX_VECTOR, 1);
+
+	device->driver.max_memcpy_size = IGB_MAX_CHUNK_SIZE;
+	device->driver.max_memcpy_count = RING_SIZE - 1;
+	device->driver.msi = MSIX_VECTOR;
+}
+
 static void igb_remove(struct vfio_pci_device *device)
 {
 	struct igb *igb = to_igb_state(device);
@@ -579,6 +599,7 @@ const struct vfio_pci_driver_ops igb_ops = {
 	.probe = igb_probe,
 	.init = igb_init,
 	.remove = igb_remove,
+	.attach = igb_attach,
 	.memcpy_start = igb_memcpy_start,
 	.memcpy_wait = igb_memcpy_wait,
 	.send_msi = igb_send_msi,

@@ -243,6 +243,26 @@ static void dsa_init(struct vfio_pci_device *device)
 	device->driver.msi = MSIX_VECTOR;
 }
 
+static void dsa_attach(struct vfio_pci_device *device)
+{
+	struct dsa_state *dsa = to_dsa_state(device);
+
+	VFIO_ASSERT_GE(device->driver.region.size, sizeof(*dsa));
+
+	/*
+	 * The device is still set up as dsa_init() left it, but BAR0 may be
+	 * mapped at a different address now, so refresh the pointers into it.
+	 */
+	dsa_register_cache_init(device);
+
+	vfio_pci_msix_enable(device, MSIX_VECTOR, 1);
+
+	device->driver.max_memcpy_count =
+		dsa->max_batches * dsa->max_copies_per_batch;
+	device->driver.max_memcpy_size = 1UL << dsa->gen_cap.max_xfer_shift;
+	device->driver.msi = MSIX_VECTOR;
+}
+
 static void dsa_remove(struct vfio_pci_device *device)
 {
 	dsa_command(device, IDXD_CMD_RESET_DEVICE);
@@ -421,6 +441,7 @@ const struct vfio_pci_driver_ops dsa_ops = {
 	.probe = dsa_probe,
 	.init = dsa_init,
 	.remove = dsa_remove,
+	.attach = dsa_attach,
 	.memcpy_start = dsa_memcpy_start,
 	.memcpy_wait = dsa_memcpy_wait,
 	.send_msi = dsa_send_msi,
