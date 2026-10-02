@@ -157,6 +157,8 @@ int __init vfio_pci_liveupdate_init(void);
 void vfio_pci_liveupdate_cleanup(void);
 int vfio_pci_liveupdate_restore_config(struct vfio_pci_core_device *vdev,
 				       struct vfio_pci_core_device_ser *ser);
+void vfio_pci_core_liveupdate_reset(struct vfio_pci_core_device *vdev,
+				    struct vfio_pci_core_device_ser *ser);
 
 static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
 {

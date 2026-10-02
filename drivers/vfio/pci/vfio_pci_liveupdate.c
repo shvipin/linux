@@ -282,7 +282,7 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 		if ((ser->flags & VFIO_PCI_SER_F_RUNNING) &&
 		    !vfio_pci_liveupdate_keep_running(vdev)) {
 			pci_warn(vdev->pdev, "Resetting device kept running across Live Update, not in noiommu mode\n");
-			ser->flags &= ~VFIO_PCI_SER_F_RUNNING;
+			vfio_pci_core_liveupdate_reset(vdev, ser);
 		}
 
 		vdev->liveupdate_incoming = ser;
@@ -297,32 +297,93 @@ out:
 
 static bool vfio_pci_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 {
+	struct vfio_pci_core_device_ser *ser = phys_to_virt(args->serialized_data);
 	struct vfio_device *device;
 
-	if (args->retrieve_status <= 0)
-		return false;
+	/*
+	 * A device kept running across the Live Update that userspace has not
+	 * taken over is reset in finish(), even if userspace has not retrieved
+	 * it, as long as it is bound to vfio-pci. Any other device must have
+	 * been retrieved and opened.
+	 */
+	if (args->retrieve_status <= 0) {
+		if (!(ser->flags & VFIO_PCI_SER_F_RUNNING))
+			return false;
+
+		device = vfio_find_device(ser, match_device);
+		if (!device)
+			return false;
+
+		vfio_device_put_registration(device);
+		return true;
+	}
 
 	device = vfio_device_from_file(args->file);
 	guard(mutex)(&device->dev_set->lock);
-	return vfio_device_cdev_opened(device);
+	return vfio_device_cdev_opened(device) ||
+	       (ser->flags & VFIO_PCI_SER_F_RUNNING);
+}
+
+static void vfio_pci_liveupdate_finish_device(struct vfio_device *device,
+					      struct vfio_pci_core_device_ser *ser)
+{
+	struct vfio_pci_core_device *vdev =
+		container_of(device, struct vfio_pci_core_device, vdev);
+
+	scoped_guard(mutex, &device->dev_set->lock) {
+		if (ser->flags & VFIO_PCI_SER_F_RUNNING) {
+			pci_warn(vdev->pdev, "Resetting device kept running across Live Update, not taken over\n");
+			vfio_pci_core_liveupdate_reset(vdev, ser);
+		}
+
+		vdev->liveupdate_incoming = NULL;
+	}
+
+	pci_liveupdate_finish(vdev->pdev);
+}
+
+/*
+ * The device was unbound from vfio-pci since can_finish() found it, so it can
+ * no longer be reset. Still finish it, as the PCI core requires all devices
+ * preserved by the previous kernel to be finished.
+ */
+static void vfio_pci_liveupdate_finish_unbound(struct vfio_pci_core_device_ser *ser)
+{
+	struct pci_dev *pdev;
+
+	pdev = pci_get_domain_bus_and_slot(ser->domain, PCI_BUS_NUM(ser->bdf),
+					   ser->bdf & 0xff);
+	if (!pdev)
+		return;
+
+	pci_warn(pdev, "Couldn't reset device kept running across Live Update, not bound to vfio-pci\n");
+	pci_liveupdate_finish(pdev);
+	pci_dev_put(pdev);
 }
 
 static void vfio_pci_liveupdate_finish(struct liveupdate_file_op_args *args)
 {
 	struct vfio_pci_core_device_ser *ser = phys_to_virt(args->serialized_data);
-	struct vfio_device *device = vfio_device_from_file(args->file);
-	struct vfio_pci_core_device *vdev;
+	struct vfio_device *device;
 
-	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+	if (args->file) {
+		vfio_pci_liveupdate_finish_device(vfio_device_from_file(args->file),
+						  ser);
+	} else {
+		/* Userspace has not retrieved the device, see can_finish(). */
+		device = vfio_find_device(ser, match_device);
+		if (device) {
+			vfio_pci_liveupdate_finish_device(device, ser);
+			vfio_device_put_registration(device);
+		} else {
+			vfio_pci_liveupdate_finish_unbound(ser);
+		}
+	}
 
-	scoped_guard(mutex, &device->dev_set->lock)
-		vdev->liveupdate_incoming = NULL;
-
-	/* Free the saved state if the device was not taken over. */
+	/* Free the saved state if the device was neither taken over nor reset. */
 	if (ser->saved_state)
 		kfree(pci_liveupdate_restore_saved_state(ser->saved_state));
 
-	pci_liveupdate_finish(to_pci_dev(device->dev));
 	kho_restore_free(ser);
 }
 

@@ -781,6 +781,32 @@ out_restore_state:
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_try_reset);
 
+#ifdef CONFIG_VFIO_PCI_LIVEUPDATE
+/*
+ * Reset a device that the previous kernel kept running across a Live Update
+ * but that userspace does not take over, the same way vfio_pci_core_disable()
+ * would if userspace had taken it over and closed it: stop its DMA, then reset
+ * it and restore the state the previous kernel saved when it first opened it.
+ */
+void vfio_pci_core_liveupdate_reset(struct vfio_pci_core_device *vdev,
+				    struct vfio_pci_core_device_ser *ser)
+{
+	struct pci_dev *pdev = vdev->pdev;
+
+	lockdep_assert_held(&vdev->vdev.dev_set->lock);
+
+	/* Devices not in noiommu mode may have been runtime suspended. */
+	pm_runtime_get_sync(&pdev->dev);
+
+	pci_clear_master(pdev);
+	vfio_pci_core_liveupdate_take_over(vdev, ser);
+	vfio_pci_core_try_reset(vdev);
+
+	pm_runtime_put(&pdev->dev);
+}
+EXPORT_SYMBOL_GPL(vfio_pci_core_liveupdate_reset);
+#endif /* CONFIG_VFIO_PCI_LIVEUPDATE */
+
 void vfio_pci_core_disable(struct vfio_pci_core_device *vdev)
 {
 	struct pci_dev *pdev = vdev->pdev;
