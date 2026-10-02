@@ -100,6 +100,31 @@
  * preserved devices back into an idle state during kexec, before handing off
  * control to the next kernel. This will be relaxed in future versions of the
  * kernel once it is safe to allow the device to keep running across kexec.
+ *
+ * The exception are devices in noiommu mode (``CONFIG_IOMMUFD_NOIOMMU``). They
+ * DMA to physical addresses, so they do not depend on DMA mappings, and VFIO
+ * keeps them running across kexec: it neither resets them nor disables bus
+ * mastering. For those, VFIO also preserves:
+ *
+ *  * The virtualized config space of the device, as seen by userspace.
+ *
+ *  * The state VFIO saved when it first opened the device, which it uses to
+ *    restore the device when userspace closes it.
+ *
+ * The device can then keep doing DMA during and after the kexec, until
+ * userspace takes it over in the next kernel by retrieving it and binding it
+ * to an iommufd, which does not reset the device. Userspace must ensure that
+ * such DMA only targets memory that stays at the same physical addresses and
+ * that the next kernel does not use, e.g. memory reserved with ``memmap=`` and
+ * mapped through device-dax.
+ *
+ * If userspace has not taken over such a device by the time the session is
+ * finished, explicitly or by closing the session, VFIO resets the device, as
+ * it would when userspace closes the device after taking it over. Finishing
+ * the session therefore does not require such a device to be retrieved or
+ * opened, but the device must be bound to ``vfio-pci``. Devices in sessions
+ * that are never retrieved are not reset. VFIO also resets the device as soon
+ * as it is retrieved if it is not in noiommu mode in the next kernel.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -152,6 +177,35 @@ static bool vfio_pci_liveupdate_can_preserve(struct liveupdate_file_handler *han
 	return true;
 }
 
+/*
+ * Prepare to keep the device running across the Live Update. Its config space
+ * state is only saved in freeze(), as userspace can keep using the device until
+ * then.
+ */
+static int vfio_pci_liveupdate_preserve_running(struct vfio_pci_core_device *vdev,
+						struct vfio_pci_core_device_ser *ser)
+{
+	int ret;
+
+	guard(mutex)(&vdev->vdev.dev_set->lock);
+
+	/*
+	 * Hand over the state saved when the device was first opened, so that
+	 * the next kernel can restore it when userspace is done with the
+	 * device.
+	 */
+	if (vdev->pci_saved_state) {
+		ret = pci_liveupdate_preserve_saved_state(vdev->pci_saved_state,
+							  &ser->saved_state);
+		if (ret)
+			return ret;
+	}
+
+	ser->reset_works = vdev->reset_works;
+	ser->flags |= VFIO_PCI_SER_F_RUNNING;
+	return 0;
+}
+
 static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 {
 	struct vfio_device *device = vfio_device_from_file(args->file);
@@ -176,9 +230,17 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	ser->bdf = pci_dev_id(pdev);
 	ser->domain = pci_domain_nr(pdev->bus);
 
+	if (vfio_pci_liveupdate_keep_running(vdev)) {
+		ret = vfio_pci_liveupdate_preserve_running(vdev, ser);
+		if (ret)
+			goto err_free;
+	}
+
 	args->serialized_data = virt_to_phys(ser);
 	return 0;
 
+err_free:
+	kho_unpreserve_free(ser);
 err_unpreserve:
 	pci_liveupdate_unpreserve(pdev);
 	return ret;
@@ -186,14 +248,19 @@ err_unpreserve:
 
 static void vfio_pci_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 {
+	struct vfio_pci_core_device_ser *ser = phys_to_virt(args->serialized_data);
 	struct vfio_device *device = vfio_device_from_file(args->file);
 
+	if (ser->saved_state)
+		pci_liveupdate_unpreserve_saved_state(ser->saved_state);
+
 	pci_liveupdate_unpreserve(to_pci_dev(device->dev));
-	kho_unpreserve_free(phys_to_virt(args->serialized_data));
+	kho_unpreserve_free(ser);
 }
 
 static int vfio_pci_liveupdate_freeze(struct liveupdate_file_op_args *args)
 {
+	struct vfio_pci_core_device_ser *ser = phys_to_virt(args->serialized_data);
 	struct vfio_device *device = vfio_device_from_file(args->file);
 	struct vfio_pci_core_device *vdev;
 	struct pci_dev *pdev;
@@ -220,26 +287,63 @@ static int vfio_pci_liveupdate_freeze(struct liveupdate_file_op_args *args)
 		return -EINVAL;
 	}
 
-	/*
-	 * Reset is a temporary measure to provide kernel after kexec a clean
-	 * device while VFIO live update work is under development and not
-	 * fully supported. It will go away once continuous DMA support is
-	 * added to device preservation.
-	 */
 	vfio_pci_zap_bars(vdev);
 	vfio_pci_dma_buf_move(vdev, true);
-	vfio_pci_core_try_reset(vdev);
-	pci_write_config_word(pdev, PCI_COMMAND, PCI_COMMAND_INTX_DISABLE);
+
+	if (ser->flags & VFIO_PCI_SER_F_RUNNING) {
+		/*
+		 * Neither reset the device nor disable bus mastering, so that
+		 * the DMA userspace set up keeps going across the kexec. Hand
+		 * over the config space state userspace programmed, so that the
+		 * next kernel can take over the device as is.
+		 */
+		ser->cfg_size = pdev->cfg_size;
+		memcpy(ser->pci_config_map, vdev->pci_config_map, pdev->cfg_size);
+		memcpy(ser->vconfig, vdev->vconfig, pdev->cfg_size);
+	} else {
+		/*
+		 * Reset is a temporary measure to provide kernel after kexec a
+		 * clean device while VFIO live update work is under development
+		 * and not fully supported. It will go away once continuous DMA
+		 * support is added to device preservation.
+		 */
+		vfio_pci_core_try_reset(vdev);
+		pci_write_config_word(pdev, PCI_COMMAND, PCI_COMMAND_INTX_DISABLE);
+	}
+
 	/*
-	 * The device has been reset, so its state no longer matches what
-	 * userspace programmed. Disable ioctl, read, write and mmap access to
-	 * the device. This is intentionally not undone in unfreeze(): if the
-	 * Live Update is aborted, userspace must drop all references to the
-	 * file (close the LUO session and the device FDs) and reopen the
-	 * device, which clears the frozen state on first open.
+	 * Disable ioctl, read, write and mmap access to the device.
+	 *
+	 * If the device has been reset, its state no longer matches what
+	 * userspace programmed. So for such a device this is intentionally not
+	 * undone in unfreeze(): if the Live Update is aborted, userspace must
+	 * drop all references to the file (close the LUO session and the device
+	 * FDs) and reopen the device, which clears the frozen state on first
+	 * open.
 	 */
 	smp_store_release(&vdev->liveupdate_frozen, true);
 	return 0;
+}
+
+static void vfio_pci_liveupdate_unfreeze(struct liveupdate_file_op_args *args)
+{
+	struct vfio_pci_core_device_ser *ser = phys_to_virt(args->serialized_data);
+	struct vfio_device *device = vfio_device_from_file(args->file);
+	struct vfio_pci_core_device *vdev;
+
+	/* A device that has been reset stays frozen, see freeze(). */
+	if (!(ser->flags & VFIO_PCI_SER_F_RUNNING))
+		return;
+
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+
+	guard(mutex)(&device->dev_set->lock);
+	guard(rwsem_write)(&vdev->memory_lock);
+
+	/* The device kept running, so userspace can just keep using it. */
+	vfio_pci_dev_clear_frozen(vdev);
+	if (__vfio_pci_memory_enabled(vdev))
+		vfio_pci_dma_buf_move(vdev, false);
 }
 
 static int match_device(struct device *dev, const void *arg)
@@ -392,6 +496,7 @@ static const struct liveupdate_file_ops vfio_pci_liveupdate_file_ops = {
 	.preserve = vfio_pci_liveupdate_preserve,
 	.unpreserve = vfio_pci_liveupdate_unpreserve,
 	.freeze = vfio_pci_liveupdate_freeze,
+	.unfreeze = vfio_pci_liveupdate_unfreeze,
 	.retrieve = vfio_pci_liveupdate_retrieve,
 	.can_finish = vfio_pci_liveupdate_can_finish,
 	.finish = vfio_pci_liveupdate_finish,
